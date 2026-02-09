@@ -1,5 +1,5 @@
 use crate::{models::event::Event, ws::wshub::WsHub};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 #[derive(Clone)]
 pub struct Broker {
@@ -7,10 +7,18 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new(buffer: usize, hub: WsHub) -> (Self, BrokerWorker) {
+    pub fn new(
+        buffer: usize,
+        hub: WsHub,
+        shutdown: broadcast::Receiver<()>,
+    ) -> (Self, BrokerWorker) {
         let (tx, rx) = mpsc::channel(buffer);
         let broker = Broker { sender: tx };
-        let worker = BrokerWorker { receiver: rx, hub };
+        let worker = BrokerWorker {
+            receiver: rx,
+            hub,
+            shutdown,
+        };
         (broker, worker)
     }
 
@@ -24,13 +32,25 @@ impl Broker {
 pub struct BrokerWorker {
     receiver: mpsc::Receiver<Event>,
     hub: WsHub,
+    shutdown: broadcast::Receiver<()>,
 }
 
 impl BrokerWorker {
     pub async fn run(mut self) {
-        while let Some(event) = self.receiver.recv().await {
-            tracing::info!("Broker routing event: {}", event.topic);
-            self.hub.publish(event).await;
+        loop {
+            tokio::select! {
+                maybe_event = self.receiver.recv() => {
+                    if let Some(event) = maybe_event {
+                        self.hub.publish(event).await;
+                    } else {
+                        break;
+                    }
+                }
+                _ = self.shutdown.recv() => {
+                    tracing::info!("Broker worker shutting down");
+                    break;
+                }
+            }
         }
 
         tracing::info!("Broker worker shutting down");

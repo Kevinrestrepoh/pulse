@@ -1,4 +1,4 @@
-use crate::models::event::Event;
+use crate::{metrics::metrics::Metrics, models::event::Event};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, mpsc};
 
@@ -7,11 +7,15 @@ pub type SubscriberTx = mpsc::Sender<Event>;
 #[derive(Clone, Default)]
 pub struct WsHub {
     topics: Arc<RwLock<HashMap<String, Vec<SubscriberTx>>>>,
+    metrics: Metrics,
 }
 
 impl WsHub {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(metrics: Metrics) -> Self {
+        WsHub {
+            topics: Arc::new(RwLock::new(HashMap::new())),
+            metrics,
+        }
     }
 
     pub async fn subscribe(&self, topic: String, tx: SubscriberTx) {
@@ -25,8 +29,11 @@ impl WsHub {
         if let Some(subscribers) = topics.get(&event.topic) {
             for sub in subscribers {
                 match sub.try_send(event.clone()) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        self.metrics.inc_delivered(1);
+                    }
                     Err(err) => {
+                        self.metrics.inc_dropped();
                         tracing::warn!("Dropping event for slow subscriber: {}", err);
                     }
                 }

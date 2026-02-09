@@ -4,9 +4,8 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use tokio::{signal, sync::broadcast};
 use tracing_subscriber;
-
-use crate::ws::wshub::WsHub;
 
 mod api;
 mod broker;
@@ -19,8 +18,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let addr: SocketAddr = "0.0.0.0:8080".parse()?;
 
-    let hub = WsHub::new();
-    let (broker, worker) = broker::broker::Broker::new(1024, hub.clone());
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        signal::ctrl_c().await.unwrap();
+        tracing::info!("Shutdown signal received");
+        let _ = shutdown_tx_clone.send(());
+    });
+
+    let metrics = metrics::metrics::Metrics::default();
+
+    let hub = ws::wshub::WsHub::new(metrics.clone());
+    let (broker, worker) = broker::broker::Broker::new(1024, hub.clone(), shutdown_tx.subscribe());
     tokio::spawn(async move {
         worker.run().await;
     });
@@ -31,15 +41,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/events",
             post({
                 let broker = broker.clone();
-                move |payload| api::events::ingest_event(payload, broker)
+                let metrics = metrics.clone();
+                move |payload| api::events::ingest_event(payload, broker, metrics)
             }),
         )
         .route(
             "/ws",
             get({
                 let hub = hub.clone();
-                move |ws, query| ws::handler::ws_handler(ws, query, hub)
+                let metrics = metrics.clone();
+                move |ws, query| {
+                    ws::handler::ws_handler(ws, query, hub, shutdown_tx.subscribe(), metrics)
+                }
             }),
+        )
+        .route(
+            "/metrics",
+            get(move || api::metrics::metrics_handler(metrics.clone())),
         );
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
