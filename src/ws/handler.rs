@@ -17,7 +17,7 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(params): Query<HashMap<String, String>>,
     hub: WsHub,
-    shutdown: broadcast::Receiver<()>,
+    shutdown: broadcast::Sender<()>,
     metrics: Metrics,
 ) -> impl IntoResponse {
     let topic = params
@@ -25,7 +25,7 @@ pub async fn ws_handler(
         .cloned()
         .unwrap_or_else(|| "default".into());
 
-    ws.on_upgrade(move |socket| handle_socket(socket, hub, topic, shutdown, metrics))
+    ws.on_upgrade(move |socket| handle_socket(socket, hub, topic, shutdown.subscribe(), metrics))
 }
 
 async fn handle_socket(

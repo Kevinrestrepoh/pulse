@@ -8,6 +8,8 @@ pub async fn ingest_event(
     metrics: Metrics,
 ) -> Json<serde_json::Value> {
     metrics.inc_received();
-    broker.publish(event).await;
+
+    let topic = event.payload.route_topic();
+    broker.publish(topic, event).await;
     Json(json!({ "message": "event created" }))
 }

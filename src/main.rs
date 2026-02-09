@@ -50,9 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get({
                 let hub = hub.clone();
                 let metrics = metrics.clone();
-                move |ws, query| {
-                    ws::handler::ws_handler(ws, query, hub, shutdown_tx.subscribe(), metrics)
-                }
+                let shutdown_tx = shutdown_tx.clone();
+                move |ws, query| ws::handler::ws_handler(ws, query, hub, shutdown_tx, metrics)
             }),
         )
         .route(
@@ -64,7 +63,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Server listening on port {}", addr);
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx.clone()))
+        .await
+        .unwrap();
 
     Ok(())
+}
+
+async fn shutdown_signal(shutdown_tx: broadcast::Sender<()>) {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install Ctrl+C handler");
+
+    tracing::info!("Shutdown signal received");
+
+    // Notify all workers
+    let _ = shutdown_tx.send(());
 }

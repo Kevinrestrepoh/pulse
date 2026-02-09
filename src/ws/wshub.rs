@@ -23,19 +23,28 @@ impl WsHub {
         topics.entry(topic).or_default().push(tx);
     }
 
-    pub async fn publish(&self, event: Event) {
+    pub async fn publish(&self, topic: String, event: Event) {
         let topics = self.topics.read().await;
 
-        if let Some(subscribers) = topics.get(&event.topic) {
+        if let Some(subscribers) = topics.get(&topic) {
+            let priority = event.payload.priority();
+
             for sub in subscribers {
-                match sub.try_send(event.clone()) {
-                    Ok(_) => {
-                        self.metrics.inc_delivered(1);
+                match priority {
+                    crate::models::event::Priority::Critical => {
+                        if sub.send(event.clone()).await.is_ok() {
+                            self.metrics.inc_delivered(1);
+                        }
                     }
-                    Err(err) => {
-                        self.metrics.inc_dropped();
-                        tracing::warn!("Dropping event for slow subscriber: {}", err);
-                    }
+                    crate::models::event::Priority::Normal => match sub.try_send(event.clone()) {
+                        Ok(_) => {
+                            self.metrics.inc_delivered(1);
+                        }
+                        Err(err) => {
+                            self.metrics.inc_dropped();
+                            tracing::warn!("Dropping event for slow subscriber: {}", err);
+                        }
+                    },
                 }
             }
         }
