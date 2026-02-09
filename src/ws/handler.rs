@@ -6,8 +6,9 @@ use axum::{
     },
     response::IntoResponse,
 };
-use std::collections::HashMap;
-use tokio::sync::mpsc;
+use futures::SinkExt;
+use std::{collections::HashMap, time::Duration};
+use tokio::{sync::mpsc, time::interval};
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -24,14 +25,28 @@ pub async fn ws_handler(
 
 async fn handle_socket(mut socket: WebSocket, hub: WsHub, topic: String) {
     let (tx, mut rx) = mpsc::channel::<Event>(32);
-
     hub.subscribe(topic.clone(), tx).await;
-    tracing::info!("WebSocket client subscribed to {}", topic);
 
-    while let Some(event) = rx.recv().await {
-        let json = serde_json::to_string(&event).unwrap();
-        if socket.send(Message::Text(Into::into(json))).await.is_err() {
-            break;
+    let mut ticker = interval(Duration::from_millis(50));
+    let mut buffer: Vec<Event> = Vec::with_capacity(32);
+
+    loop {
+        tokio::select! {
+            maybe_event = rx.recv() => {
+                match maybe_event {
+                    Some(event) => buffer.push(event),
+                    None => break,
+                }
+            }
+            _ = ticker.tick() => {
+                if !buffer.is_empty() {
+                    let json = serde_json::to_string(&buffer).unwrap();
+                    if socket.send(Message::Text(Into::into(json))).await.is_err() {
+                        break;
+                    }
+                    let _ = buffer.close();
+                }
+            }
         }
     }
 

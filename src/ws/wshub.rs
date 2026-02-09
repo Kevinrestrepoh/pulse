@@ -24,7 +24,12 @@ impl WsHub {
 
         if let Some(subscribers) = topics.get(&event.topic) {
             for sub in subscribers {
-                let _ = sub.send(event.clone()).await;
+                match sub.try_send(event.clone()) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!("Dropping event for slow subscriber: {}", err);
+                    }
+                }
             }
         }
     }
