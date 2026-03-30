@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, thread::sleep, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
 use dotenv::dotenv;
 use rand::{RngExt, seq::IndexedRandom};
@@ -20,24 +20,27 @@ async fn main() {
     tracing_subscriber::fmt::init();
     let client = Client::new();
 
+    let ws_url = Arc::new(env::var("WS_URL").expect("WS_URL must be set"));
+    let api_url = Arc::new(env::var("API_URL").expect("API_URL must be set"));
+
     let user_count = 1000;
     let total_events = 100;
     let barrier = Arc::new(tokio::sync::Barrier::new(user_count + 1));
 
     let users: Vec<String> = (0..user_count).map(|i| format!("user-{}", i)).collect();
 
-    for user in users.clone() {
-        let ws_url = env::var("WS_URL").expect("WS_URL must be set");
+    for user in &users {
         let barrier = barrier.clone();
+        let ws_url = ws_url.clone();
+        let user = user.clone();
         tokio::spawn(async move {
             ws_client::connect_feed(&ws_url, &format!("feed:{}", user), barrier).await;
         });
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
+    let mut rng = rand::rng();
     for _ in 0..total_events {
-        let mut rng = rand::rng();
-
         let roll: u8 = rng.random_range(0..100);
 
         let event: Event = if roll < 70 {
@@ -53,23 +56,17 @@ async fn main() {
         info!("Sending event: {:?}", event.payload);
 
         let _ = client
-            .post(format!(
-                "{}/events",
-                env::var("API_URL").expect("API_URL must be set")
-            ))
+            .post(format!("{}/events", api_url))
             .json(&event)
             .send()
             .await;
 
-        sleep(Duration::from_millis(200));
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let metrics_url = format!(
-        "{}/metrics",
-        env::var("API_URL").expect("API_URL must be set")
-    );
+    let metrics_url = format!("{}/metrics", api_url);
 
     match client.get(metrics_url).send().await {
         Ok(resp) => {
